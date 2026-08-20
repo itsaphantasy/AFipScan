@@ -8,27 +8,44 @@ import urllib.request
 from .config import debug_log
 
 
+def _resolve(base):
+    """把用户填的面板地址拆成 (站点根路径, admin目录路径)。
+
+    兼容两种填法：
+      'https://cmliu.afcx.cc'         -> ('https://cmliu.afcx.cc', 'https://cmliu.afcx.cc/admin')
+      'https://cmliu.afcx.cc/admin'   -> ('https://cmliu.afcx.cc', 'https://cmliu.afcx.cc/admin')
+    登录接口在根路径 /login，配置接口在 /admin 下，两者不能混用。
+    """
+    base = (base or "").strip().rstrip("/")
+    if base.endswith("/admin"):
+        root = base[: -len("/admin")].rstrip("/")
+    else:
+        root = base
+    return root, root + "/admin"
+
+
 def write_panel(base, pwd, ip_list, first_port):
     """把优选 IP 列表写入面板，返回 (成功?, 提示文字)。"""
     try:
+        root, admin = _resolve(base)
         cj = http.cookiejar.CookieJar()
         op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
         op.addheaders = [("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")]
-        op.open(base + "/login", data=b"password=" + pwd.encode(), timeout=30).read()
+        op.open(root + "/login", data=b"password=" + pwd.encode(), timeout=30).read()
         debug_log("面板登录成功")
 
         # 写入优选 IP 列表
-        req = urllib.request.Request(base + "/admin/ADD.txt",
+        req = urllib.request.Request(admin + "/ADD.txt",
                                      data="\n".join(ip_list).encode(), method="POST")
         r = op.open(req, timeout=30).read().decode("utf-8", "ignore")
         debug_log("ADD.txt 写入响应: " + r[:80])
 
         # 更新配置：本地 IP 库 + 指定端口
-        cfg = json.loads(op.open(base + "/admin/config.json", timeout=30).read())
+        cfg = json.loads(op.open(admin + "/config.json", timeout=30).read())
         cfg["优选订阅生成"]["local"] = True
         cfg["优选订阅生成"]["本地IP库"]["随机IP"] = False
         cfg["优选订阅生成"]["本地IP库"]["指定端口"] = first_port
-        req = urllib.request.Request(base + "/admin/config.json",
+        req = urllib.request.Request(admin + "/config.json",
                                      data=json.dumps(cfg, ensure_ascii=False).encode(),
                                      method="POST")
         req.add_header("Content-Type", "application/json")
@@ -43,12 +60,13 @@ def write_panel(base, pwd, ip_list, first_port):
 def check_panel(base, pwd):
     """检测面板是否在线、登录密码是否正确，返回 (成功?, 提示文字)。"""
     try:
+        root, admin = _resolve(base)
         cj = http.cookiejar.CookieJar()
         op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
         op.addheaders = [("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")]
-        op.open(base + "/login", data=b"password=" + pwd.encode(), timeout=15).read()
+        op.open(root + "/login", data=b"password=" + pwd.encode(), timeout=15).read()
         # 登录后能读到 config.json 说明密码正确、有权限
-        json.loads(op.open(base + "/admin/config.json", timeout=15).read())
+        json.loads(op.open(admin + "/config.json", timeout=15).read())
         return True, "面板在线，登录成功"
     except Exception as e:
         debug_log("面板检测失败: " + str(e)[:80])
