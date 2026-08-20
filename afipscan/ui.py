@@ -299,14 +299,20 @@ class App:
     def save_ui_state(self):
         """把窗口里填的接口/密码/订阅/测速参数写回 config.json，下次打开自动恢复。"""
         try:
+            def _int(v, d):
+                """数字框容错：空或非数字时回退默认值，不让单个坏值连累整个保存。"""
+                try:
+                    return int(str(v).strip()) or d
+                except Exception:
+                    return d
             config.update_config({
                 "panel": self.panel_var.get().strip(),
                 "admin_password": self.pwd_var.get().strip(),
                 "subscription_url": self.sub_var.get().strip(),
-                "port_default": int(self.port_var.get().strip() or config.PORT_DEFAULT),
-                "top_default": int(self.top_var.get().strip() or 12),
-                "workers_default": int(self.workers_var.get().strip() or 24),
-                "limit_default": int(self.limit_var.get().strip() or 300),
+                "port_default": _int(self.port_var.get(), config.PORT_DEFAULT),
+                "top_default": _int(self.top_var.get(), 12),
+                "workers_default": _int(self.workers_var.get(), 24),
+                "limit_default": _int(self.limit_var.get(), 300),
             })
             debug_log("UI 状态已写入 config.json")
         except Exception as e:
