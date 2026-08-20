@@ -2,7 +2,7 @@
 
 > 在你本地电脑上实时测速，找出对**你当前网络**最快、且能连上你 edgetunnel 项目的 Cloudflare IP，然后**一键写入面板**，再更新 v2rayN 订阅即可使用。
 
-![screenshot](screenshot.png)
+![screenshot](screenshot-v2.png)
 
 ## ✨ 特性
 
