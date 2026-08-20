@@ -394,7 +394,7 @@ class App:
                     cands += got
                     self.msgq.put(("log", f"[*] 拉取 {url.split('/')[-1]} -> {len(got)} 条"))
                 except Exception as e:
-                    self.msgq.put(("log", f"[!] 拉取失败 {str(e)[:50]}"))
+                    self.msgq.put(("log", f"[!] 拉取失败 {str(e)[:40]}（开了代理请关闭再试）"))
         cands += netutils.parse_lines("\n".join(BUILTIN), ports[0])
         seen, uniq = set(), []
         for c in cands:
@@ -648,7 +648,7 @@ class App:
                 got = netutils.parse_lines(netutils.fetch(url, timeout=10), 443)
                 self.msgq.put(("log", f"[✓] 候选源 {url.split('/')[-1]}: 拉取 {len(got)} 条"))
             except Exception as e:
-                self.msgq.put(("log", f"[!] 候选源 {url.split('/')[-1]}: 拉取失败 {str(e)[:40]}"))
+                self.msgq.put(("log", f"[!] 候选源 {url.split('/')[-1]}: 拉取失败 {str(e)[:30]}（开了代理请关闭再试）"))
         # 9. Windows 防火墙状态（3 个配置文件）
         fw_ok = 0
         try:

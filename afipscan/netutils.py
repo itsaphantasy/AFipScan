@@ -11,9 +11,10 @@ from .config import SNI
 
 
 def fetch(url, timeout=20):
-    """下载远程文本（候选 IP 列表）。"""
+    """下载远程文本（候选 IP 列表）。强制直连，不走系统代理。"""
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    op = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with op.open(req, timeout=timeout) as r:
         return r.read().decode("utf-8", "ignore")
 
 
