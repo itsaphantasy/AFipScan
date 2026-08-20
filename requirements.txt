@@ -1,0 +1,3 @@
+# AFipScan 运行依赖
+# 仅 ttkbootstrap 为可选（提供现代浅色主题，缺省会回退到系统自带主题）
+ttkbootstrap>=1.10
