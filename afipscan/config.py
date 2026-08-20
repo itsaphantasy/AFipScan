@@ -20,8 +20,9 @@ DEFAULT_CONFIG = {
     "limit_default": 300,
     "proxy_url": "http://127.0.0.1:20808",
     "candidate_urls": [
+        "https://raw.githubusercontent.com/HandsomeMJZ/cfip/refs/heads/main/best_ips.txt",
+        "https://raw.githubusercontent.com/svip-s/cloudflare_ip/refs/heads/main/best_ips.txt",
         "https://cf.junzhen.qzz.io/best_ips_bj.txt",
-        "https://cf.junzhen.qzz.io/best_ips.txt",
     ],
     "subscription_url": "",
     "builtin_ips": [
@@ -30,6 +31,43 @@ DEFAULT_CONFIG = {
         "207.57.134.29:443#HK", "54.95.106.234:443#HK", "57.180.60.121:443#HK",
         "38.55.195.57:443#HK", "150.109.11.223:443#SG", "198.20.153.247:443#HK",
     ],
+}
+
+
+# 更多候选源池：弹窗点「获取更多源地址」后追加显示（默认不勾选）
+DEFAULT_MORE_URLS = [
+    "https://cf.junzhen.qzz.io/best_ips.txt",
+    "https://cf.junzhen.qzz.io/full_ips.txt",
+    "https://cf.junzhen.qzz.io/full_ips_bj.txt",
+    "https://raw.githubusercontent.com/HandsomeMJZ/cfip/refs/heads/main/full_ips.txt",
+    "https://raw.githubusercontent.com/yuanxiawan/cfipv4db/refs/heads/main/high_score_ips.txt",
+    "https://raw.githubusercontent.com/ZZY202203/Worker-Vless-3-USB/main/addressesapi.txt",
+    "https://raw.githubusercontent.com/cmliu/WorkerVless2sub/main/addressesapi.txt",
+]
+
+
+# 源友好名称（弹窗列表显示用；未登记的直接显示文件名）
+SOURCE_NAMES = {
+    "https://raw.githubusercontent.com/HandsomeMJZ/cfip/refs/heads/main/best_ips.txt":
+        "【高速优选】HandsomeMJZ 高速IP（18条）",
+    "https://raw.githubusercontent.com/svip-s/cloudflare_ip/refs/heads/main/best_ips.txt":
+        "【带速度】svip-s 陕西移动优选（62条，含速度标注）",
+    "https://cf.junzhen.qzz.io/best_ips_bj.txt":
+        "【高速优选】junzhen 北京电信高速IP（29条）",
+    "https://cf.junzhen.qzz.io/best_ips.txt":
+        "junzhen 四川联通优选IP（18条）",
+    "https://cf.junzhen.qzz.io/full_ips.txt":
+        "junzhen 全量IP-四川联通（489条）",
+    "https://cf.junzhen.qzz.io/full_ips_bj.txt":
+        "junzhen 全量IP-北京电信（517条）",
+    "https://raw.githubusercontent.com/HandsomeMJZ/cfip/refs/heads/main/full_ips.txt":
+        "HandsomeMJZ 全量IP-GitHub镜像（489条）",
+    "https://raw.githubusercontent.com/yuanxiawan/cfipv4db/refs/heads/main/high_score_ips.txt":
+        "yuanxiawan 韩国高分IP（15条）",
+    "https://raw.githubusercontent.com/ZZY202203/Worker-Vless-3-USB/main/addressesapi.txt":
+        "ZZY202203 多端口节点（30条）",
+    "https://raw.githubusercontent.com/cmliu/WorkerVless2sub/main/addressesapi.txt":
+        "cmliu 备用节点（4条）",
 }
 
 
@@ -88,6 +126,8 @@ PROXY_URL = CFG.get("proxy_url", "http://127.0.0.1:20808")
 CANDIDATE_URLS = CFG["candidate_urls"]
 BUILTIN = CFG["builtin_ips"]
 SUB_URL = CFG.get("subscription_url", "")
+MORE_URLS = list(DEFAULT_MORE_URLS)
+SOURCE_NAMES = dict(SOURCE_NAMES)
 
 # Cloudflare 常用入站端口：443/8443 是 TLS 标准，2053/2083/2087/2096 是 HTTP/3 常用
 RECOMMEND_PORTS = ["443", "8443", "2053", "2083", "2087", "2096"]

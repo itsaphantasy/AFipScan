@@ -116,9 +116,10 @@ class RoundedButton(tk.Canvas):
                  width=120, height=38, font=None, tooltip=None,
                  canvas_bg=None, state="normal",
                  image=None, image_on_color=None, image_light=None,
-                 autofit=False):
+                 autofit=False, outline=1):
         # autofit=True：内容(图标+文字)太宽时自动撑大按钮，防止超出圆角框
         self._autofit = autofit
+        self._outline = outline  # 边框粗细(px)，默认 1；弹窗等场景可传 2 让边框更明显
         bg = canvas_bg or "#ffffff"
         super().__init__(master, width=width, height=height,
                          highlightthickness=0, bd=0, bg=bg, cursor="hand2")
@@ -258,7 +259,8 @@ class RoundedButton(tk.Canvas):
             pts = self._rrect(0, 0, w, h, r)
             self._shape = self.create_polygon(pts, smooth=False,
                                               fill=c["bg"],
-                                              outline=c["border"] or c["bg"])
+                                              outline=c["border"] or c["bg"],
+                                              width=self._outline)
             cx, cy, dy = w // 2, h // 2, 1
         else:
             # 正常/悬停：右下偏移投影 + 主体，形成凸出感
@@ -269,7 +271,8 @@ class RoundedButton(tk.Canvas):
             pts = self._rrect(0, 0, w - shx, h - shy, r)
             self._shape = self.create_polygon(pts, smooth=False,
                                               fill=c["bg"],
-                                              outline=c["border"] or c["bg"])
+                                              outline=c["border"] or c["bg"],
+                                              width=self._outline)
             cx, cy, dy = (w - shx) // 2, (h - shy) // 2, 0
         # 图标+文字整体居中；按下时向下偏移1px模拟按压
         img = self._current_image()

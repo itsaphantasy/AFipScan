@@ -67,6 +67,69 @@ def probe(ip, port, timeout=5, rounds=2):
     return min(ts) if ts else None
 
 
+def speed_probe(ip, port, timeout=8, max_sec=2.5, bytes_target=20 * 1024 * 1024):
+    """测单个 IP 的下载速度(Mbps)：TLS 握手后拉取 Cloudflare 测速文件。
+
+    返回 Mbps（浮点）或 None（连接失败/非 200/没测到数据）。
+    只读 max_sec 秒就断开，避免浪费流量和时间。
+    注意：speed.cloudflare.com 对 UA 有校验，必须带完整浏览器 UA + Sec-Fetch 头，
+    否则返回 403。
+    """
+    s = None
+    try:
+        s = socket.create_connection((ip, port), timeout=timeout)
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        with ctx.wrap_socket(s, server_hostname="speed.cloudflare.com") as ss:
+            req = ("GET /__down?bytes=%d HTTP/1.1\r\n"
+                   "Host: speed.cloudflare.com\r\n"
+                   "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) "
+                   "Chrome/125.0.0.0 Safari/537.36\r\n"
+                   "Accept: */*\r\n"
+                   "Accept-Language: zh-CN,zh;q=0.9\r\n"
+                   "Accept-Encoding: identity\r\n"
+                   "Sec-Fetch-Dest: empty\r\n"
+                   "Sec-Fetch-Mode: cors\r\n"
+                   "Sec-Fetch-Site: same-origin\r\n"
+                   "Connection: close\r\n\r\n" % bytes_target).encode()
+            ss.sendall(req)
+            buf = b""
+            while b"\r\n\r\n" not in buf:
+                chunk = ss.recv(4096)
+                if not chunk:
+                    break
+                buf += chunk
+                if len(buf) > 65536:
+                    break
+            if b"\r\n\r\n" not in buf:
+                return None
+            status = buf.split(b"\r\n", 1)[0]
+            if b"200" not in status:
+                return None
+            total = len(buf.split(b"\r\n\r\n", 1)[1])
+            t1 = time.time()
+            while time.time() - t1 < max_sec:
+                chunk = ss.recv(65536)
+                if not chunk:
+                    break
+                total += len(chunk)
+            dt = time.time() - t1
+            if dt <= 0:
+                return None
+            mbps = total * 8 / dt / 1e6
+            return mbps if mbps > 0 else None
+    except Exception:
+        return None
+    finally:
+        try:
+            if s:
+                s.close()
+        except Exception:
+            pass
+
+
 def get_lan_ip():
     """获取局域网 IP；失败返回 None。"""
     try:

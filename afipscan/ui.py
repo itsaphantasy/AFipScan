@@ -218,17 +218,19 @@ class App:
         b.pack(side="left", padx=4)
 
     def _build_results(self, root):
-        """测速结果表格。"""
-        res = ttk.LabelFrame(root, text=" ③ 测速结果(延迟从低到高) ")
+        """测速结果表格：速度从高到低。"""
+        res = ttk.LabelFrame(root, text=" ③ 测速结果(速度从高到低) ")
         res.pack(fill="both", expand=True, padx=12, pady=6)
-        cols = ("ip", "ms", "region")
+        cols = ("ip", "ms", "speed", "region")
         self.tree = ttk.Treeview(res, columns=cols, show="headings", height=5)
         self.tree.heading("ip", text="IP:端口")
         self.tree.heading("ms", text="延迟(ms)")
+        self.tree.heading("speed", text="速度(Mbps)")
         self.tree.heading("region", text="备注")
-        self.tree.column("ip", width=260)
-        self.tree.column("ms", width=110, anchor="center")
-        self.tree.column("region", width=300)
+        self.tree.column("ip", width=230)
+        self.tree.column("ms", width=90, anchor="center")
+        self.tree.column("speed", width=100, anchor="center")
+        self.tree.column("region", width=280)
         self.tree.tag_configure("odd", background="#f8faf8")
         self.tree.tag_configure("even", background="#ffffff")
         vsb = ttk.Scrollbar(res, orient="vertical", command=self.tree.yview)
@@ -396,8 +398,9 @@ class App:
         cands += netutils.parse_lines("\n".join(BUILTIN), ports[0])
         seen, uniq = set(), []
         for c in cands:
-            if c[0] not in seen:
-                seen.add(c[0])
+            key = (c[0], c[1])  # IP+端口 去重，避免全量源覆盖高速源的端口
+            if key not in seen:
+                seen.add(key)
                 uniq.append(c)
         cands = uniq
         # 多端口时每个 IP × 每个端口各测一遍
@@ -426,9 +429,38 @@ class App:
         finally:
             # 停止时不等待在测任务，立即返回，UI 快速恢复
             ex.shutdown(wait=False, cancel_futures=True)
-        results.sort(key=lambda r: r[0])
-        debug_log("测速完成, 达标 %d 个, 取前 %d" % (len(results), top))
-        self.msgq.put(("done", results[:top]))
+        # ---- 带宽测速：对延迟达标 IP 实测下载速度，按速度从高到低排序 ----
+        if self.running and results:
+            self.msgq.put(("log", f"[*] 延迟达标 {len(results)} 个，正在实测下载速度 ..."))
+            speed_map = {}
+            sex = concurrent.futures.ThreadPoolExecutor(max_workers=min(workers, 8))
+            try:
+                sfuts = {sex.submit(netutils.speed_probe, ip, port): (ip, port)
+                         for _ms, ip, port, _tag in results}
+                sdone = 0
+                for sf in concurrent.futures.as_completed(sfuts):
+                    if not self.running:
+                        break
+                    sdone += 1
+                    k = sfuts[sf]
+                    try:
+                        v = sf.result()
+                        if v:
+                            speed_map[k] = v
+                    except Exception:
+                        pass
+                    if sdone % 10 == 0:
+                        self.msgq.put(("log", f"    已测速度 {sdone}/{len(sfuts)} ..."))
+            finally:
+                sex.shutdown(wait=False, cancel_futures=True)
+        final = []
+        for ms, ip, port, tag in results:
+            final.append((ms, ip, port, tag, speed_map.get((ip, port))))
+        # 速度高在前；没测到速度的按延迟排在最前（也算有结果）
+        final.sort(key=lambda r: (-(r[4] or 0), r[0]))
+        debug_log("测速完成, 达标 %d 个, 测到速度 %d 个, 取前 %d"
+                  % (len(results), len(speed_map), top))
+        self.msgq.put(("done", final[:top]))
 
     def scan_done(self, best):
         """测速完成：恢复按钮、填充表格与日志。"""
@@ -441,12 +473,15 @@ class App:
         if not best:
             self.log("[!] 没测到符合条件的结果，把【延迟上限】调高(如600)再试")
             return
-        self.log("\n===== 最快结果 =====")
-        for i, (ms, ip, port, tag) in enumerate(best):
+        self.log("\n===== 最快结果(按速度) =====")
+        for i, (ms, ip, port, tag, speed) in enumerate(best):
             region = tag if tag else "优选"
             tagname = "odd" if i % 2 else "even"
-            self.tree.insert("", "end", values=(f"{ip}:{port}", f"{ms:.0f}", region), tags=(tagname,))
-            self.log(f"  {ip}:{port}  {ms:.0f}ms")
+            sp = f"{speed:.0f}" if speed else "-"
+            self.tree.insert("", "end",
+                             values=(f"{ip}:{port}", f"{ms:.0f}", sp, region),
+                             tags=(tagname,))
+            self.log(f"  {ip}:{port}  {ms:.0f}ms  {sp}Mbps")
         self.log("[*] 测速完成！点【一键写入】写入配置，然后去 v2rayN 更新订阅")
 
     # ==================== 获取 IP ====================
@@ -457,41 +492,113 @@ class App:
         threading.Thread(target=self.ip_worker, daemon=True).start()
 
     def import_ips(self):
-        """打开弹窗：自定义候选IP地址源列表(每行一个网址)。"""
+        """打开弹窗：勾选要使用的优选IP源；点「获取更多源地址」可追加更多源。
+
+        列表区做成固定高度 + 滚动条，源再多也不会把底部按钮挤出屏幕；
+        按钮栏固定在窗口底部，始终可见。
+        """
         win = tk.Toplevel(self.root)
         win.title("导入更多优选IP地址")
         win.configure(bg="#ffffff")
         win.resizable(False, False)
-        tk.Label(win, text="每行一个地址源(网址)，测速时会从这些网址拉取优选IP：",
+        tk.Label(win, text="勾选要使用的优选IP源（默认已选 3 个高速优选源）：",
                  bg="#ffffff", fg="#6b7280",
-                 font=("Microsoft YaHei UI", 10)).pack(anchor="w", padx=14, pady=(14, 4))
-        text = tk.Text(win, width=66, height=9, font=("Consolas", 10),
-                       relief="solid", bd=1)
-        text.pack(padx=14, pady=4)
-        text.insert("1.0", "\n".join(config.CANDIDATE_URLS))
+                 font=("Microsoft YaHei UI", 10)).pack(anchor="w", padx=14, pady=(14, 6))
+
+        # ---- 可滚动列表区：内容超出固定高度时用滚轮/滚动条查看 ----
+        list_area = tk.Frame(win, bg="#ffffff")
+        list_area.pack(fill="both", expand=True, padx=14)
+        canvas = tk.Canvas(list_area, bg="#ffffff", highlightthickness=0, bd=0)
+        vsb = ttk.Scrollbar(list_area, orient="vertical", command=canvas.yview)
+        body = tk.Frame(canvas, bg="#ffffff")
+        body.bind("<Configure>",
+                  lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=body, anchor="nw")
+        canvas.configure(yscrollcommand=vsb.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        vsb.pack(side="right", fill="y")
+
+        def _on_wheel(e):
+            """鼠标滚轮滚动源列表。"""
+            canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_wheel))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+
+        # 初始列表 = 已保存源 ∪ 默认 3 个高速源，全部勾选（不丢用户已有配置）
+        saved = [u for u in config.CANDIDATE_URLS if u]
+        defaults = [u for u in config.DEFAULT_CONFIG["candidate_urls"] if u not in saved]
+        vars_ = {}
+
+        def add_row(url, checked):
+            """在弹窗列表里加一行：复选框 + 友好名称/完整地址。"""
+            var = tk.BooleanVar(value=checked)
+            vars_[url] = var
+            row = tk.Frame(body, bg="#ffffff")
+            row.pack(fill="x", pady=2)
+            tk.Checkbutton(row, variable=var, bg="#ffffff",
+                           activebackground="#ffffff", bd=0,
+                           highlightthickness=0).pack(side="left", anchor="n")
+            name = config.SOURCE_NAMES.get(url, url.split("/")[-1])
+            tk.Label(row, text=f"{name}\n{url}", bg="#ffffff",
+                     fg="#374151", font=("Microsoft YaHei UI", 9),
+                     anchor="w", justify="left", wraplength=600).pack(
+                side="left", fill="x", expand=True)
+
+        for url in saved + defaults:
+            add_row(url, True)
+
         bar = tk.Frame(win, bg="#ffffff")
-        bar.pack(fill="x", padx=14, pady=(4, 14))
+        bar.pack(fill="x", padx=14, pady=(8, 14))
+
+        def recenter():
+            """列表高度封顶 + 窗口居中，保证按钮栏一定在屏幕内。"""
+            win.update_idletasks()
+            sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
+            content_h = len(vars_) * 46 + 8     # 估算源列表总高
+            max_canvas = max(180, int(sh * 0.7) - 170)
+            canvas_h = min(content_h, max_canvas)
+            canvas.configure(height=canvas_h)
+            w = 720                             # 固定窗口宽
+            h = min(canvas_h + 170, int(sh * 0.92))  # 显式计算总高，不依赖 reqheight
+            x = max(0, (sw - w) // 2)
+            y = max(0, (sh - h) // 2)
+            win.geometry(f"{w}x{h}+{x}+{y}")
+            canvas.yview_moveto(0)
+
+        def load_more():
+            """点击「获取更多源地址」：追加更多源（默认不勾选），并禁用按钮。"""
+            added = 0
+            for url in config.MORE_URLS:
+                if url not in vars_:
+                    add_row(url, False)
+                    added += 1
+            if added:
+                self.log(f"[*] 已追加 {added} 个更多源地址（未勾选，需要手动勾选）")
+            more_btn.set_state("disabled")
+            more_btn.set_text("已加载全部")
+            recenter()
 
         def do_save():
-            """保存：解析每行网址 → 写回配置并刷新内存。"""
-            urls = [ln.strip() for ln in text.get("1.0", "end").splitlines() if ln.strip()]
+            """保存：收集勾选的网址 → 写回配置并刷新内存。"""
+            urls = [u for u, v in vars_.items() if v.get()]
             config.save_candidate_urls(urls)
             self.log(f"[OK] 已保存 {len(urls)} 个候选IP地址源")
             win.destroy()
 
         RoundedButton(bar, text="保存", command=do_save,
-                      style="accent", width=90, height=34,
+                      style="accent", width=96, height=38,
                       canvas_bg="#ffffff").pack(side="left", padx=(0, 8))
         RoundedButton(bar, text="取消", command=win.destroy,
-                      style="default", width=80, height=34,
-                      canvas_bg="#ffffff").pack(side="left")
-        win.update_idletasks()
-        w = win.winfo_reqwidth()
-        h = win.winfo_reqheight()
-        x = (win.winfo_screenwidth() - w) // 2
-        y = (win.winfo_screenheight() - h) // 2
-        win.geometry(f"{w}x{h}+{x}+{y}")
-        text.focus_set()
+                      style="default", width=88, height=38, outline=2,
+                      canvas_bg="#ffffff").pack(side="left", padx=(0, 8))
+        more_btn = RoundedButton(bar, text="获取更多源地址",
+                                 command=load_more, style="accent_light",
+                                 width=160, height=38, outline=2,
+                                 canvas_bg="#ffffff")
+        more_btn.pack(side="left")
+        recenter()
+        canvas.focus_set()
 
     def env_check(self):
         """一键环境检测：后台线程逐项检查并输出到日志。"""
@@ -624,11 +731,19 @@ class App:
 
     def apply_worker(self):
         """组装优选结果并调用面板写入模块，回传结果。"""
-        ip_list = [f"{ip}:{port}#{tag if tag else '优选'}" for ms, ip, port, tag in self.best]
+        # 写入前按 IP 查重（保留排在最前=速度最快的），避免面板出现重复节点
+        dedup = {}
+        for item in self.best:
+            if item[1] not in dedup:
+                dedup[item[1]] = item
+        ip_list = [f"{ip}:{port}#{tag if tag else '优选'}"
+                   for _ms, ip, port, tag, _speed in dedup.values()]
         first_port = getattr(self, "current_ports", [443])[0]
         base = self.panel_var.get().strip().rstrip("/")
         pwd = self.pwd_var.get().strip()
         ok, msg = write_panel(base, pwd, ip_list, first_port)
+        if ok and len(ip_list) != len(self.best):
+            self.log(f"[i] 已去重：{len(self.best)} -> {len(ip_list)} 个")
         self.msgq.put(("log", f"[*] 写入IP: {msg}" if not ok else "[OK] " + msg))
         if ok:
             self.save_ui_state()  # 写入成功，把接口/密码/订阅存进 config.json
@@ -650,7 +765,8 @@ class App:
         if not path:
             return
         with open(path, "w", encoding="utf-8") as f:
-            f.write("\n".join(f"{ip}:{port}#{tag if tag else '优选'}" for ms, ip, port, tag in self.best))
+            f.write("\n".join(f"{ip}:{port}#{tag if tag else '优选'}"
+                              for _ms, ip, port, tag, _speed in self.best))
         self.log(f"[*] 已导出: {path}")
 
     def copy_all(self):
@@ -658,7 +774,7 @@ class App:
         if not self.best:
             messagebox.showinfo("提示", "请先测速")
             return
-        lines = [f"{ip}:{port}" for ms, ip, port, tag in self.best]
+        lines = [f"{ip}:{port}" for _ms, ip, port, _tag, _speed in self.best]
         text = "\r\n".join(lines)
         self.root.clipboard_clear()
         self.root.clipboard_append(text)

@@ -13,8 +13,9 @@
   "proxy_url": "http://127.0.0.1:20808",
   "_说明_候选列表": "【candidate_urls】自动拉取的候选 IP 列表网址（可增删，每行一个；拉取失败会自动用内置兜底）",
   "candidate_urls": [
-    "https://cf.junzhen.qzz.io/best_ips_bj.txt",
-    "https://cf.junzhen.qzz.io/best_ips.txt"
+    "https://raw.githubusercontent.com/HandsomeMJZ/cfip/refs/heads/main/best_ips.txt",
+    "https://raw.githubusercontent.com/svip-s/cloudflare_ip/refs/heads/main/best_ips.txt",
+    "https://cf.junzhen.qzz.io/best_ips_bj.txt"
   ],
   "_说明_内置IP": "【builtin_ips】内置兜底候选 IP（候选列表拉取失败时用；格式 IP:端口#备注，一行一个）",
   "builtin_ips": [
