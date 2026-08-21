@@ -7,15 +7,55 @@ import threading
 import time
 import urllib.request
 
-from .config import SNI
+from .config import PROXY_URL, SNI
+
+
+def _fetch_via(url, timeout, proxy=None):
+    """用指定网络路径下载文本：proxy=None 走直连，否则走该代理。"""
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    if proxy:
+        ph = urllib.request.ProxyHandler({"http": proxy, "https": proxy})
+    else:
+        # 直连：显式忽略系统代理，避免"系统代理开着但 v2rayN 没启动"时的 10061 报错
+        ph = urllib.request.ProxyHandler({})
+    op = urllib.request.build_opener(ph)
+    with op.open(req, timeout=timeout) as r:
+        return r.read().decode("utf-8", "ignore")
+
+
+def sys_proxy_url():
+    """读取 Windows 系统代理地址；未开启时返回空字符串。"""
+    try:
+        import winreg as _wr
+        _k = _wr.OpenKey(_wr.HKEY_CURRENT_USER,
+                         r"Software\Microsoft\Windows\CurrentVersion\Internet Settings")
+        if not _wr.QueryValueEx(_k, "ProxyEnable")[0]:
+            return ""
+        return str(_wr.QueryValueEx(_k, "ProxyServer")[0] or "")
+    except Exception:
+        return ""
 
 
 def fetch(url, timeout=20):
-    """下载远程文本（候选 IP 列表）。强制直连，不走系统代理。"""
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    op = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    with op.open(req, timeout=timeout) as r:
-        return r.read().decode("utf-8", "ignore")
+    """下载远程文本（候选 IP 列表）。
+
+    先直连；直连失败自动改走本地代理（config 里的 v2rayN 地址，再退到
+    Windows 系统代理），兼顾"没开代理直连超时"与"开了代理但代理没启动"
+    两种情况。测速本身仍走直连，不受影响。
+    """
+    errs = []
+    try:
+        return _fetch_via(url, timeout)
+    except Exception as e:
+        errs.append(e)
+    for proxy in (PROXY_URL, sys_proxy_url()):
+        if not proxy:
+            continue
+        try:
+            return _fetch_via(url, timeout, proxy)
+        except Exception as e:
+            errs.append(e)
+    raise OSError("直连与本地代理均拉取失败") from errs[0]
 
 
 def parse_lines(text, port_default):

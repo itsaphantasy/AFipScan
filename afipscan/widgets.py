@@ -131,7 +131,8 @@ class RoundedButton(tk.Canvas):
         self.state = state
         self._hover = False
         self._pressed = False
-        self._font = font or ("Microsoft YaHei UI", 12, "bold")
+        # 全软件按钮统一 11 号粗体，避免各按钮字号不一致
+        self._font = font or ("Microsoft YaHei UI", 11, "bold")
         self._shape = None
         self._label = None
         self._icon = None

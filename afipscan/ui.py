@@ -133,10 +133,9 @@ class App:
         e = RoundedEntry(top, textvariable=self.limit_var, width=8)
         e.grid(row=0, column=7, padx=4, pady=(8,2), sticky="w")
         Tooltip(e.entry, "只保留低于该延迟的结果(默认300;扫不到调600)")
-        # 获取本地IP按钮：默认白，检测后本地=绿 / 代理=红
+        # 获取本地IP按钮：默认白，检测后本地=绿 / 代理=红（字体统一 11 号）
         self.ip_btn = RoundedButton(top, text="获取本地IP", command=self.get_ip,
                                     style="default", width=260, height=38,
-                                    font=("Microsoft YaHei UI", 11, "bold"),
                                     canvas_bg="#ffffff",
                                     image=self.icons["getip"],
                                     tooltip="点击获取当前出口IP\n绿色=本地直连\n红色=已开代理，为了准确获取优选IP，建议关闭代理")
@@ -194,7 +193,6 @@ class App:
         self.start_btn.pack(side="left", padx=4)
         b = RoundedButton(btns, text="导出结果", command=self.export,
                           style="default", width=112, height=40,
-                          font=("Microsoft YaHei UI", 10, "bold"),
                           canvas_bg="#ffffff",
                           image=self.icons["export"],
                           autofit=True,
@@ -202,7 +200,6 @@ class App:
         b.pack(side="left", padx=4)
         b = RoundedButton(btns, text="更多优选IP源", command=self.import_ips,
                           style="default", width=140, height=40,
-                          font=("Microsoft YaHei UI", 10, "bold"),
                           canvas_bg="#ffffff",
                           image=self.icons["import"],
                           autofit=True,
@@ -210,7 +207,6 @@ class App:
         b.pack(side="left", padx=4)
         b = RoundedButton(btns, text="环境检测", command=self.env_check,
                           style="default", width=132, height=40,
-                          font=("Microsoft YaHei UI", 10, "bold"),
                           canvas_bg="#ffffff",
                           image=self.icons["env"],
                           autofit=True,
@@ -394,7 +390,7 @@ class App:
                     cands += got
                     self.msgq.put(("log", f"[*] 拉取 {url.split('/')[-1]} -> {len(got)} 条"))
                 except Exception as e:
-                    self.msgq.put(("log", f"[!] 拉取失败 {str(e)[:40]}（开了代理请关闭再试）"))
+                    self.msgq.put(("log", f"[!] 拉取失败：{str(e)[:40]}（已自动尝试直连+本地代理）"))
         cands += netutils.parse_lines("\n".join(BUILTIN), ports[0])
         seen, uniq = set(), []
         for c in cands:
@@ -648,7 +644,7 @@ class App:
                 got = netutils.parse_lines(netutils.fetch(url, timeout=10), 443)
                 self.msgq.put(("log", f"[✓] 候选源 {url.split('/')[-1]}: 拉取 {len(got)} 条"))
             except Exception as e:
-                self.msgq.put(("log", f"[!] 候选源 {url.split('/')[-1]}: 拉取失败 {str(e)[:30]}（开了代理请关闭再试）"))
+                self.msgq.put(("log", f"[!] 候选源 {url.split('/')[-1]}: 拉取失败 {str(e)[:40]}"))
         # 9. Windows 防火墙状态（3 个配置文件）
         fw_ok = 0
         try:
