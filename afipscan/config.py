@@ -168,3 +168,30 @@ def save_candidate_urls(urls):
         pass
     CFG["candidate_urls"] = list(urls)
     CANDIDATE_URLS = list(urls)
+
+
+# 候选IP内容缓存：成功拉取一次后本地保存，之后扫描时断网/关代理也能直接用缓存
+CACHE_FILE = os.path.join(get_base_dir(), "candidate_cache.json")
+
+
+def load_candidate_cache():
+    """读取本地候选IP缓存，返回 {源URL: 原始文本}；无缓存/损坏返回空 dict。"""
+    try:
+        with open(CACHE_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict) and isinstance(data.get("sources"), dict):
+            return data["sources"]
+    except Exception:
+        pass
+    return {}
+
+
+def save_candidate_cache(cache):
+    """把候选IP缓存写盘：按源URL保存原始文本，供扫描时拉取失败兜底使用。"""
+    try:
+        payload = {"updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                   "sources": cache}
+        with open(CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=1)
+    except Exception:
+        pass

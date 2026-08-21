@@ -377,20 +377,34 @@ class App:
         self.current_ports = ports
         self.msgq.put(("log", "[*] 正在拉取候选 IP 列表 ..."))
         debug_log("scan_worker 启动, ports=%s top=%s workers=%s limit=%s" % (ports, top, workers, limit))
-        # 并行拉取多个候选源，谁先到先用
+        # 并行拉取多个候选源，谁先到先用；拉取失败自动用上次成功的本地缓存兜底
         import concurrent.futures
         cands = []
+        cache = config.load_candidate_cache()
+        cache_dirty = False
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(config.CANDIDATE_URLS) or 1) as fex:
             futs = {fex.submit(netutils.fetch, url): url for url in config.CANDIDATE_URLS}
             for f in concurrent.futures.as_completed(futs):
                 url = futs[f]
+                name = url.split("/")[-1]
                 try:
-                    got = netutils.parse_lines(f.result(), ports[0])
-                    debug_log("拉取成功 %s -> %d 条" % (url.split("/")[-1], len(got)))
+                    text = f.result()
+                    cache[url] = text  # 成功拉取 -> 更新本地缓存，之后关代理也能扫
+                    cache_dirty = True
+                    got = netutils.parse_lines(text, ports[0])
+                    debug_log("拉取成功 %s -> %d 条" % (name, len(got)))
                     cands += got
-                    self.msgq.put(("log", f"[*] 拉取 {url.split('/')[-1]} -> {len(got)} 条"))
+                    self.msgq.put(("log", f"[*] 拉取 {name} -> {len(got)} 条"))
                 except Exception as e:
-                    self.msgq.put(("log", f"[!] 拉取失败：{str(e)[:40]}（直连+代理均失败，检查网络或开v2rayN后重试）"))
+                    cached = cache.get(url, "")
+                    if cached:
+                        got = netutils.parse_lines(cached, ports[0])
+                        cands += got
+                        self.msgq.put(("log", f"[i] {name} 拉取失败({str(e)[:18]})，使用本地缓存 {len(got)} 条"))
+                    else:
+                        self.msgq.put(("log", f"[!] {name} 拉取失败：{str(e)[:40]}（无本地缓存，可开v2rayN拉一次后关掉）"))
+        if cache_dirty:
+            config.save_candidate_cache(cache)
         cands += netutils.parse_lines("\n".join(BUILTIN), ports[0])
         seen, uniq = set(), []
         for c in cands:
@@ -500,6 +514,9 @@ class App:
         tk.Label(win, text="勾选要使用的优选IP源（默认已选 3 个高速优选源）：",
                  bg="#ffffff", fg="#6b7280",
                  font=("Microsoft YaHei UI", 10)).pack(anchor="w", padx=14, pady=(14, 6))
+        tk.Label(win, text="提示：成功拉取过的源会自动缓存到本地，之后关代理扫描也会自动用缓存，测速仍走真实直连。",
+                 bg="#ffffff", fg="#0e9f6e",
+                 font=("Microsoft YaHei UI", 9)).pack(anchor="w", padx=14, pady=(0, 4))
 
         # ---- 可滚动列表区：内容超出固定高度时用滚轮/滚动条查看 ----
         list_area = tk.Frame(win, bg="#ffffff")
@@ -638,13 +655,17 @@ class App:
         pwd = self.pwd_var.get().strip()
         ok, msg = check_panel(base, pwd)
         self.msgq.put(("log", f"[{'✓' if ok else '!'}] edgetunnel 面板: {msg}"))
-        # 8. 候选 IP 源
+        # 8. 候选 IP 源（拉取失败时提示是否有本地缓存可用）
+        cache = config.load_candidate_cache()
         for url in config.CANDIDATE_URLS:
             try:
                 got = netutils.parse_lines(netutils.fetch(url, timeout=10), 443)
                 self.msgq.put(("log", f"[✓] 候选源 {url.split('/')[-1]}: 拉取 {len(got)} 条"))
             except Exception as e:
-                self.msgq.put(("log", f"[!] 候选源 {url.split('/')[-1]}: 拉取失败 {str(e)[:40]}（直连+代理均失败）"))
+                cached = cache.get(url, "")
+                tip = (f"，有本地缓存 {len(netutils.parse_lines(cached, 443))} 条(扫描自动用)"
+                       if cached else "，无本地缓存")
+                self.msgq.put(("log", f"[!] 候选源 {url.split('/')[-1]}: 拉取失败 {str(e)[:40]}{tip}"))
         # 9. Windows 防火墙状态（3 个配置文件）
         fw_ok = 0
         try:

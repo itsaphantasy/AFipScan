@@ -17,3 +17,6 @@ debug_log.txt
 # 系统
 Thumbs.db
 .DS_Store
+
+# 候选IP本地缓存(运行生成)
+candidate_cache.json
