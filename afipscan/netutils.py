@@ -6,6 +6,9 @@ import ssl
 import threading
 import time
 import urllib.request
+import ipaddress
+import random
+import re
 
 from .config import PROXY_URL, SNI
 
@@ -58,12 +61,274 @@ def fetch(url, timeout=20):
     raise OSError("直连与本地代理均拉取失败") from errs[0]
 
 
-def parse_lines(text, port_default):
-    """解析候选文本为 [(ip, port, 备注)]，支持 ip:port#备注 / ip#备注 / ip。"""
+# Cloudflare 机房三字码 -> 中文名（用于把 /cdn-cgi/trace 查到的真实机房翻译成地区名）
+AIRPORT_CODES = {
+    "HKG": "香港", "TPE": "台北", "KHH": "高雄", "MFM": "澳门",
+    "NRT": "东京", "HND": "东京", "KIX": "大阪", "NGO": "名古屋",
+    "FUK": "福冈", "CTS": "札幌", "OKA": "冲绳",
+    "ICN": "首尔", "GMP": "首尔", "PUS": "釜山",
+    "SIN": "新加坡", "BKK": "曼谷", "DMK": "曼谷",
+    "KUL": "吉隆坡", "HKT": "普吉岛",
+    "MNL": "马尼拉", "CEB": "宿务",
+    "HAN": "河内", "SGN": "胡志明市",
+    "JKT": "雅加达", "DPS": "巴厘岛",
+    "DEL": "德里", "BOM": "孟买", "MAA": "金奈",
+    "DXB": "迪拜", "AUH": "阿布扎比",
+    "SJC": "圣何塞", "LAX": "洛杉矶", "SFO": "旧金山",
+    "SEA": "西雅图", "PDX": "波特兰",
+    "LAS": "拉斯维加斯", "PHX": "菲尼克斯",
+    "DEN": "丹佛", "DFW": "达拉斯", "IAH": "休斯顿",
+    "ORD": "芝加哥", "MSP": "明尼阿波利斯",
+    "ATL": "亚特兰大", "MIA": "迈阿密", "MCO": "奥兰多",
+    "JFK": "纽约", "EWR": "纽约", "LGA": "纽约",
+    "BOS": "波士顿", "PHL": "费城", "IAD": "华盛顿",
+    "YYZ": "多伦多", "YVR": "温哥华", "YUL": "蒙特利尔",
+    "LHR": "伦敦", "LGW": "伦敦", "STN": "伦敦",
+    "CDG": "巴黎", "ORY": "巴黎",
+    "FRA": "法兰克福", "MUC": "慕尼黑", "TXL": "柏林",
+    "AMS": "阿姆斯特丹", "EIN": "埃因霍温",
+    "MAD": "马德里", "BCN": "巴塞罗那",
+    "FCO": "罗马", "MXP": "米兰", "LIN": "米兰",
+    "ZRH": "苏黎世", "GVA": "日内瓦",
+    "VIE": "维也纳", "PRG": "布拉格",
+    "WAW": "华沙", "KRK": "克拉科夫",
+    "HEL": "赫尔辛基", "OSL": "奥斯陆", "ARN": "斯德哥尔摩",
+    "CPH": "哥本哈根",
+    "SYD": "悉尼", "MEL": "墨尔本", "BNE": "布里斯班",
+    "PER": "珀斯", "ADL": "阿德莱德",
+    "AKL": "奥克兰", "WLG": "惠灵顿",
+    "GRU": "圣保罗", "GIG": "里约热内卢", "EZE": "布宜诺斯艾利斯",
+    "SCL": "圣地亚哥", "LIM": "利马", "BOG": "波哥大",
+    "JNB": "约翰内斯堡", "CPT": "开普敦", "CAI": "开罗",
+}
+
+# CIDR 网段展开时每个 /24 子网最多采样的 IP 数量（官方 ips-v4 全量拆 /24 约 6k 个）
+MAX_CIDR_SAMPLE = 6000
+
+
+# 常见用户输入(国家/地区码、中文名) -> 对应的 Cloudflare 机房三字码集合
+REGION_ALIASES = {
+    "HK": {"HKG"}, "HONGKONG": {"HKG"}, "香港": {"HKG"},
+    "TW": {"TPE", "KHH"}, "TAIWAN": {"TPE", "KHH"}, "台湾": {"TPE", "KHH"},
+    "MO": {"MFM"}, "澳门": {"MFM"},
+    "JP": {"NRT", "HND", "KIX", "NGO", "FUK", "CTS", "OKA"}, "JAPAN": {"NRT", "HND", "KIX"},
+    "日本": {"NRT", "HND", "KIX", "NGO", "FUK", "CTS", "OKA"},
+    "东京": {"NRT", "HND"}, "大阪": {"KIX"}, "名古屋": {"NGO"},
+    "KR": {"ICN", "GMP", "PUS"}, "韩国": {"ICN", "GMP", "PUS"}, "首尔": {"ICN", "GMP"},
+    "SG": {"SIN"}, "SINGAPORE": {"SIN"}, "新加坡": {"SIN"},
+    "TH": {"BKK", "DMK"}, "泰国": {"BKK", "DMK"}, "曼谷": {"BKK"},
+    "MY": {"KUL"}, "马来西亚": {"KUL"}, "吉隆坡": {"KUL"},
+    "VN": {"HAN", "SGN"}, "越南": {"HAN", "SGN"},
+    "PH": {"MNL", "CEB"}, "菲律宾": {"MNL", "CEB"},
+    "ID": {"JKT", "DPS"}, "印尼": {"JKT", "DPS"}, "印度尼西亚": {"JKT", "DPS"},
+    "IN": {"DEL", "BOM", "MAA"}, "印度": {"DEL", "BOM", "MAA"},
+    "AE": {"DXB", "AUH"}, "阿联酋": {"DXB", "AUH"}, "迪拜": {"DXB"},
+    "US": {"SJC", "LAX", "SFO", "SEA", "PDX", "LAS", "PHX", "DEN", "DFW", "IAH",
+           "ORD", "MSP", "ATL", "MIA", "MCO", "JFK", "EWR", "LGA", "BOS", "PHL", "IAD"},
+    "USA": {"SJC", "LAX", "SFO", "SEA", "PDX", "LAS", "PHX", "DEN", "DFW", "IAH",
+           "ORD", "MSP", "ATL", "MIA", "MCO", "JFK", "EWR", "LGA", "BOS", "PHL", "IAD"},
+    "美国": {"SJC", "LAX", "SFO", "SEA", "PDX", "LAS", "PHX", "DEN", "DFW", "IAH",
+           "ORD", "MSP", "ATL", "MIA", "MCO", "JFK", "EWR", "LGA", "BOS", "PHL", "IAD"},
+    "UK": {"LHR", "LGW", "STN"}, "GB": {"LHR", "LGW", "STN"}, "英国": {"LHR", "LGW", "STN"},
+    "DE": {"FRA", "MUC", "TXL"}, "德国": {"FRA", "MUC", "TXL"}, "法兰克福": {"FRA"},
+    "FR": {"CDG", "ORY"}, "法国": {"CDG", "ORY"}, "巴黎": {"CDG"},
+    "NL": {"AMS", "EIN"}, "荷兰": {"AMS", "EIN"},
+    "ES": {"MAD", "BCN"}, "西班牙": {"MAD", "BCN"},
+    "IT": {"FCO", "MXP", "LIN"}, "意大利": {"FCO", "MXP", "LIN"},
+    "CH": {"ZRH", "GVA"}, "瑞士": {"ZRH", "GVA"},
+    "AT": {"VIE"}, "奥地利": {"VIE"},
+    "CZ": {"PRG"}, "捷克": {"PRG"},
+    "PL": {"WAW", "KRK"}, "波兰": {"WAW", "KRK"},
+    "SE": {"ARN"}, "瑞典": {"ARN"},
+    "FI": {"HEL"}, "芬兰": {"HEL"},
+    "NO": {"OSL"}, "挪威": {"OSL"},
+    "DK": {"CPH"}, "丹麦": {"CPH"},
+    "AU": {"SYD", "MEL", "BNE", "PER", "ADL"}, "澳大利亚": {"SYD", "MEL", "BNE", "PER", "ADL"},
+    "NZ": {"AKL", "WLG"}, "新西兰": {"AKL", "WLG"},
+    "CA": {"YYZ", "YVR", "YUL"}, "加拿大": {"YYZ", "YVR", "YUL"},
+    "BR": {"GRU", "GIG"}, "巴西": {"GRU", "GIG"},
+    "AR": {"EZE"}, "阿根廷": {"EZE"},
+    "CL": {"SCL"}, "智利": {"SCL"},
+    "PE": {"LIM"}, "秘鲁": {"LIM"},
+    "CO": {"BOG"}, "哥伦比亚": {"BOG"},
+    "ZA": {"JNB", "CPT"}, "南非": {"JNB", "CPT"},
+    "EG": {"CAI"}, "埃及": {"CAI"},
+}
+
+
+# 三字码(机房) -> 国家/地区二字码：用于 VPS 按地区文件命名、填地区码时直接拉对应文件
+COUNTRY_OF = {}
+for _c2, _colos in REGION_ALIASES.items():
+    if len(_c2) == 2 and _c2.isalpha():
+        for _c in _colos:
+            COUNTRY_OF.setdefault(_c, _c2)
+# 英国规范为 GB（UK 也归到 GB）
+if "GB" in REGION_ALIASES:
+    for _c in REGION_ALIASES["GB"]:
+        COUNTRY_OF[_c] = "GB"
+
+
+# 二字码 -> 中文地区名（弹窗勾选列表显示用）
+COUNTRY_NAMES = {
+    "HK": "香港", "TW": "台湾", "MO": "澳门", "JP": "日本", "KR": "韩国",
+    "SG": "新加坡", "TH": "泰国", "MY": "马来西亚", "VN": "越南", "PH": "菲律宾",
+    "ID": "印尼", "IN": "印度", "AE": "阿联酋", "US": "美国", "GB": "英国",
+    "DE": "德国", "FR": "法国", "NL": "荷兰", "ES": "西班牙", "IT": "意大利",
+    "CH": "瑞士", "AT": "奥地利", "CZ": "捷克", "PL": "波兰", "SE": "瑞典",
+    "FI": "芬兰", "NO": "挪威", "DK": "丹麦", "AU": "澳大利亚", "NZ": "新西兰",
+    "CA": "加拿大", "BR": "巴西", "AR": "阿根廷", "CL": "智利", "PE": "秘鲁",
+    "CO": "哥伦比亚", "ZA": "南非", "EG": "埃及",
+}
+
+
+def canonical_region(needle):
+    """把一个地区输入(如 HK/HKG/香港/东京/JP)归一到唯一二字码；多解或无法判断返回 None。"""
+    n = (needle or "").strip().upper()
+    if not n:
+        return None
+    if len(n) == 3 and n in COUNTRY_OF:
+        return COUNTRY_OF[n]
+    alias = REGION_ALIASES.get(n)
+    if alias:
+        codes = {COUNTRY_OF.get(c) for c in alias}
+        codes.discard(None)
+        return codes.pop() if len(codes) == 1 else None
+    if len(n) == 2 and n in COUNTRY_OF:
+        return n
+    return None
+
+
+def region_file(needles):
+    """若多个地区输入都归一到同一个二字码，返回该二字码；否则返回 None(需拉全量本地筛)。"""
+    out = set()
+    for nd in needles:
+        c = canonical_region(nd)
+        if not c:
+            return None
+        out.add(c)
+    return out.pop() if len(out) == 1 else None
+
+
+def region_matches(needle, iata, chinese):
+    """判断一个IP是否匹配用户输入的地区筛选条件。
+
+    空输入 = 不过滤；支持国家/地区码(HK/SG/JP)、三字码前缀(HK匹配HKG)、
+    完整三字码、或中文名(香港/日本/东京)。
+    """
+    n = (needle or "").strip().upper()
+    if not n:
+        return True
+    alias = REGION_ALIASES.get(n)
+    iata_u = (iata or "").strip().upper()
+    if alias:
+        if iata_u and iata_u in alias:
+            return True
+    if iata_u and (iata_u == n or iata_u.startswith(n)):
+        return True
+    if chinese and n in (chinese or ""):
+        return True
+    return False
+
+
+def region_name(code):
+    """三字码 -> 中文地区名；查不到返回原码。"""
+    return AIRPORT_CODES.get(code.upper(), code.upper() if code else "未知地区")
+
+
+def _expand_cidr_line(line, port_default):
+    """若整行是 IPv4 网段(如 173.245.48.0/20)，展开成 (ip, port, '') 列表：每个 /24 抽 1 个 IP。"""
+    if not re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d{1,2}$", line.strip()):
+        return None
+    try:
+        net = ipaddress.ip_network(line.strip(), strict=False)
+    except Exception:
+        return None
     out = []
+    if net.prefixlen >= 24:
+        hosts = list(net.hosts())
+        if hosts:
+            out.append((str(random.choice(hosts)), port_default, ""))
+        return out
+    for sub in net.subnets(new_prefix=24):
+        hosts = list(sub.hosts())
+        if hosts:
+            out.append((str(random.choice(hosts)), port_default, ""))
+    return out
+
+
+def get_iata(ip, port=443, timeout=3):
+    """直连 https://{ip}/cdn-cgi/trace 查真实机房三字码(colo)。
+
+    不走 DNS、不校验证书(和延迟测速一致的直连方式)。查不到返回 None。
+    """
+    test_host = "speed.cloudflare.com"
+    s = None
+    try:
+        s = socket.create_connection((ip, port), timeout=timeout)
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        with ctx.wrap_socket(s, server_hostname=test_host) as ss:
+            req = ("GET /cdn-cgi/trace HTTP/1.1\r\n"
+                   "Host: %s\r\n"
+                   "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36\r\n"
+                   "Connection: close\r\n\r\n" % test_host).encode()
+            ss.sendall(req)
+            data = b""
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                buf = ss.recv(4096)
+                if not buf:
+                    break
+                data += buf
+                if b"colo=" in data:
+                    break
+                if len(data) > 65536:
+                    break
+        text = data.decode("utf-8", "ignore")
+        for line in text.splitlines():
+            if line.startswith("colo="):
+                code = line.split("=", 1)[1].strip().upper()
+                if code and code != "UNKNOWN":
+                    return code
+        if "CF-RAY" in text:
+            cf_ray = text.split("CF-RAY:", 1)[1].split("\r\n", 1)[0].strip()
+            if "-" in cf_ray:
+                for part in cf_ray.split("-")[-2:]:
+                    if len(part) == 3 and part.isalpha():
+                        return part.upper()
+    except Exception:
+        return None
+    finally:
+        try:
+            if s:
+                s.close()
+        except Exception:
+            pass
+    return None
+
+
+def parse_lines(text, port_default):
+    """解析候选文本为 [(ip, port, 备注)]。
+
+    支持 ip:port#备注 / ip#备注 / ip，也支持 IPv4 网段(x.x.x.x/xx，自动展开，
+    每个 /24 抽 1 个 IP，方便直接用 cloudflare.com/ips-v4 这类官方网段源)。
+    """
+    out = []
+    sampled = 0
     for ln in text.splitlines():
         ln = ln.strip()
         if not ln or ln.startswith("#"):
+            continue
+        # 网段行：直接展开（没有端口/备注）
+        expanded = _expand_cidr_line(ln, port_default)
+        if expanded is not None:
+            for ip, port, tag in expanded:
+                if sampled >= MAX_CIDR_SAMPLE:
+                    break
+                out.append((ip, port, tag))
+                sampled += 1
             continue
         tag = ""
         if "#" in ln:
@@ -82,7 +347,7 @@ def parse_lines(text, port_default):
     return out
 
 
-def probe(ip, port, timeout=5, rounds=2):
+def probe(ip, port, timeout=5, rounds=1):
     """测单个 IP 的 TCP+TLS 延迟（连目标域名握手），返回最快一次毫秒数。"""
     ts = []
     for _ in range(rounds):

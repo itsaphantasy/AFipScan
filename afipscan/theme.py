@@ -78,7 +78,7 @@ def apply_style(root):
     style.configure("Treeview", background="#ffffff", fieldbackground="#ffffff",
                     foreground=TEXT, rowheight=30, borderwidth=0)
     style.configure("Treeview.Heading", background="#f5f7fa", foreground="#374151",
-                    font=(FONT, FONT_SIZE, "bold"), padding=6,
+                    font=(FONT, FONT_SIZE-2, "bold"), padding=6,
                     borderwidth=1, relief="solid")
     style.map("Treeview", background=[("selected", "#d1fae5")], foreground=[("selected", TEXT)])
     style.configure("TCombobox", fieldbackground="#ffffff", background=CARD,

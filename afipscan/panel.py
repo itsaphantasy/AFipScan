@@ -4,6 +4,7 @@
 import http.cookiejar
 import json
 import urllib.request
+import urllib.error
 
 from .config import debug_log
 
@@ -71,3 +72,61 @@ def check_panel(base, pwd):
     except Exception as e:
         debug_log("面板检测失败: " + str(e)[:80])
         return False, str(e)[:80]
+
+
+def _enable_cfnew_api(base, uuid):
+    """开启 CFnew 面板「允许API管理」(ae=yes)，供 preferred-ips 接口使用。"""
+    url = (base.rstrip("/") + "/" + uuid + "/api/config")
+    req = urllib.request.Request(url, data=json.dumps({"ae": "yes"}).encode(),
+                                 method="POST")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+    urllib.request.urlopen(req, timeout=20).read()
+
+
+def write_cfnew(base, uuid, ip_list):
+    """把优选 IP 列表写入 CFnew 面板（preferred-ips API），返回 (成功?, 提示)。
+
+    CFnew = byJoey/cfnew（Cloudflare Worker + KV），写入无需登录：
+      POST https://{base}/{uuid}/api/preferred-ips
+      body: [{"ip":"1.2.3.4","port":443,"name":"节点1"}, ...]
+    若返回 404，先自动开启面板「允许API管理」(ae=yes) 再重试一次。
+    """
+    try:
+        base = (base or "").strip().rstrip("/")
+        uuid = (uuid or "").strip().rstrip("/")
+
+        nodes = []
+        for line in ip_list:
+            line = line.strip()
+            if not line:
+                continue
+            hostport, _, name = line.partition("#")
+            ip, _, port = hostport.partition(":")
+            nodes.append({"ip": ip, "port": int(port or 443), "name": name or "优选"})
+
+        url = base + "/" + uuid + "/api/preferred-ips"
+
+        def _post():
+            req = urllib.request.Request(url, data=json.dumps(nodes).encode(),
+                                         method="POST")
+            req.add_header("Content-Type", "application/json")
+            req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+            return urllib.request.urlopen(req, timeout=30).read()
+
+        try:
+            resp = _post()
+        except urllib.error.HTTPError as e:
+            if e.code != 404:
+                raise
+            debug_log("CFnew 返回404，尝试开启API管理后重试")
+            _enable_cfnew_api(base, uuid)
+            resp = _post()
+
+        text = resp.decode("utf-8", "ignore")
+        debug_log("CFnew preferred-ips 响应: " + text[:200])
+        return True, "CFnew 面板已更新！去 v2rayN 更新订阅即可"
+    except Exception as e:
+        debug_log("CFnew 写入失败: " + str(e)[:120])
+        return False, str(e)[:120]
+

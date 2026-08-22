@@ -15,7 +15,7 @@ from .icon_assets import ICONS, ICONS_GREEN, ICONS_RED, ICONS_WHITE
 def icon_photo(name, color="gray"):
     """返回按钮图标 tk.PhotoImage（22x22）。
 
-    name  : 图标名（start/stop/export/env/import/getip/write/bolt/github）
+    name  : 图标名（start/stop/export/env/import/getip/write/region/bolt/github）
     color : gray=深灰(白底按钮) / white=纯白(彩色底按钮)
             green=绿(白底绿字/标题闪电) / red=红(白底红字)
     """

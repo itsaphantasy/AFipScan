@@ -5,9 +5,6 @@ import math
 import tkinter as tk
 import tkinter.font as tkfont
 
-from .config import debug_log
-
-
 def _rounded_rect(x0, y0, x1, y1, r):
     """生成圆角矩形顶点：每角用多段直线近似圆弧，四角对称稳定。"""
     r = max(0, min(r, (x1 - x0) // 2, (y1 - y0) // 2))
@@ -188,12 +185,10 @@ class RoundedButton(tk.Canvas):
 
     # ---- 交互反馈 ----
     def _on_enter(self, e=None):
-        debug_log("RB enter: %s" % self.text)
         self._hover = True
         self._draw()
 
     def _on_leave(self, e=None):
-        debug_log("RB leave: %s" % self.text)
         self._hover = False
         self._pressed = False
         self._draw()
@@ -318,36 +313,129 @@ class RoundedEntry(tk.Canvas):
 
     RADIUS = 6          # 圆角半径
     PADX = 10           # 左右内边距
-    ENTRY_HEIGHT = 44   # 统一输入框高度(比原45px小1px)
+    ENTRY_HEIGHT = 42   # 统一输入框高度
 
     def __init__(self, master, textvariable=None, width=10, show=None,
-                 font=None, canvas_bg="#ffffff"):
+                 font=None, canvas_bg="#ffffff", placeholder=None,
+                 right_icon=None, right_cmd=None, stretch=False):
         font = font or ("Microsoft YaHei UI", 12)
         self._font = font
         self._focused = False
+        self._right_icon = right_icon
+        self._right_cmd = right_cmd
+        self._icon_bbox = None
+        self._icon_item = None
+        self._icon_hover = False
+        self._icon_pressed = False
+        self._stretch = stretch
         super().__init__(master, width=1, height=1,
                          highlightthickness=0, bd=0, bg=canvas_bg, cursor="xterm")
         self.entry = tk.Entry(self, textvariable=textvariable, show=show,
                               font=font, bd=0, relief="flat", bg="#ffffff",
                               fg="#1f2937", insertbackground="#1f2937",
                               highlightthickness=0, width=width)
-        # 宽度按内容自适应，高度固定统一（不受字体影响）
+        # 宽度按内容自适应，高度固定统一；右侧预留可选内嵌图标
         ew = self.entry.winfo_reqwidth()
         eh = self.entry.winfo_reqheight()
-        self._cfg_w = ew + self.PADX * 2 + 2
+        self._icon_w = (right_icon.width() + 10) if right_icon else 0
+        self._cfg_w = ew + self.PADX * 2 + 2 + self._icon_w
         self._cfg_h = self.ENTRY_HEIGHT
         self.configure(width=self._cfg_w, height=self._cfg_h)
         py = max(4, (self._cfg_h - eh) // 2)  # 内嵌输入框垂直居中
+        self._entry_y = py
         self._entry_win = self.create_window(self.PADX + 1, py + 1,
                                              window=self.entry, anchor="nw")
+        if right_icon:
+            ix = self._cfg_w - self.PADX - right_icon.width()
+            iy = (self._cfg_h - right_icon.height()) // 2
+            self._icon_item = self.create_image(ix, iy, image=right_icon,
+                                                anchor="nw", tags="right_icon")
+            self._icon_bbox = (ix, iy, ix + right_icon.width(), iy + right_icon.height())
         self._draw()
         self.bind("<Configure>", lambda e: self._draw())
-        self.bind("<Button-1>", lambda e: self.entry.focus_set())
+        self.bind("<Enter>", self._on_enter)
+        self.bind("<Leave>", self._on_leave)
+        self.bind("<Motion>", self._on_motion)
+        self.bind("<ButtonPress-1>", self._on_press)
+        self.bind("<ButtonRelease-1>", self._on_release)
         self.entry.bind("<FocusIn>", lambda e: self._set_focus(True))
         self.entry.bind("<FocusOut>", lambda e: self._set_focus(False))
+        self._placeholder = placeholder
+        if placeholder:
+            self._init_placeholder()
+
+    def set_right_cmd(self, cmd):
+        # 设置框内右侧图标的点击回调（添加按钮）。
+        self._right_cmd = cmd
+
+    def _hit_icon(self, e):
+        if not self._icon_bbox:
+            return False
+        x0, y0, x1, y1 = self._icon_bbox
+        return x0 <= e.x <= x1 and y0 <= e.y <= y1
+
+    def _on_enter(self, e):
+        self._on_motion(e)
+
+    def _on_leave(self, e):
+        if self._icon_hover or self._icon_pressed:
+            self._icon_hover = False
+            self._icon_pressed = False
+            self._draw()
+
+    def _on_motion(self, e):
+        h = self._hit_icon(e)
+        if h != self._icon_hover:
+            self._icon_hover = h
+            self._draw()
+
+    def _on_press(self, e):
+        if self._hit_icon(e):
+            self._icon_pressed = True
+            self._draw()
+        else:
+            self.entry.focus_set()
+
+    def _on_release(self, e):
+        was = self._icon_pressed
+        self._icon_pressed = False
+        self._draw()
+        if was and self._hit_icon(e) and self._right_cmd:
+            self._right_cmd()
+
+    def _init_placeholder(self):
+        """创建占位提示层：叠加在输入框上，留空时显示灰色示例文字。"""
+        ew = self.entry.winfo_reqwidth()
+        ph = tk.Label(self, text=self._placeholder, bg="#ffffff", fg="#9ca3af",
+                      font=self._font, anchor="w", cursor="xterm")
+        self._ph_win = self.create_window(self.PADX + 1, self._entry_y + 1,
+                                          window=ph, anchor="nw", width=ew)
+        self._ph = ph
+        ph.bind("<Button-1>", lambda e: self.entry.focus_set())
+        self.entry.bind("<KeyRelease>", lambda e: self._update_ph(), add="+")
+        self._update_ph()
+
+    def _update_ph(self):
+        """根据输入是否为空，显示/隐藏占位提示。"""
+        if not self._placeholder:
+            return
+        if self.entry.get() == "":
+            self.itemconfigure(self._ph_win, state="normal")
+        else:
+            self.itemconfigure(self._ph_win, state="hidden")
+
+    def _hide_ph(self):
+        if not self._placeholder:
+            return
+        self.itemconfigure(self._ph_win, state="hidden")
 
     def _set_focus(self, on):
         self._focused = on
+        if self._placeholder:
+            if on:
+                self._hide_ph()
+            else:
+                self._update_ph()
         self._draw()
 
     def _draw(self):
@@ -359,4 +447,28 @@ class RoundedEntry(tk.Canvas):
         pts = _rounded_rect(1, 1, w - 1, h - 1, self.RADIUS)
         self.create_polygon(pts, smooth=False, fill="#ffffff",
                             outline=border, tags="rounded_bg")
+        # stretch 模式：输入区与箭头随框宽拉伸，让尾端贴到右侧
+        if self._stretch:
+            avail = w - self.PADX * 2 - 2
+            if self._icon_item is not None and self._right_icon is not None:
+                avail -= self._right_icon.width() + 8
+            if avail > 40:
+                self.itemconfigure(self._entry_win, width=avail)
+                if getattr(self, "_ph_win", None) is not None:
+                    self.itemconfigure(self._ph_win, width=avail)
+        if self._icon_item is not None and self._right_icon is not None:
+            ix = w - self.PADX - self._right_icon.width()
+            iy = (h - self._right_icon.height()) // 2
+            self.coords(self._icon_item, ix, iy)
+            self._icon_bbox = (ix, iy, ix + self._right_icon.width(), iy + self._right_icon.height())
+        # 绿箭头触碰反馈：悬停浅绿底、按下更深绿底
+        self.delete("icon_hl")
+        if self._icon_bbox and (self._icon_hover or self._icon_pressed):
+            x0, y0, x1, y1 = self._icon_bbox
+            pad = 4
+            color = "#a7f3d0" if self._icon_pressed else "#d1fae5"
+            hpts = _rounded_rect(x0 - pad, y0 - pad, x1 + pad, y1 + pad, 9)
+            self.create_polygon(hpts, smooth=False, fill=color, outline="", tags="icon_hl")
         self.tag_raise(self._entry_win)
+        if self._icon_bbox:
+            self.tag_raise("right_icon")
